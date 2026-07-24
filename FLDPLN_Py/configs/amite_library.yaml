@@ -1,0 +1,33 @@
+# PyFLDPLN_src config for the Amite AOI (bil_Amite/ input data).
+# See PyFLDPLN_src/config.py for the full schema.
+
+run:
+  n_workers: null      # null = os.cpu_count() auto
+  use_gpu: false
+
+paths:
+  home_dir: /home/jsong33/Research/FLDPLN_Pyconverting/
+  dem: bil_Amite/Resample_Amite.bil
+  fil: bil_Amite/Amite_Fil.bil
+  fdr: bil_Amite/Amite_Fdr.bil
+  fac: bil_Amite/Amite_Fac.bil
+  segment_raster: FLDPLN_Py/outputs/amite/bil/str_segid.bil
+  seg_info: FLDPLN_Py/outputs/amite/mat/seg_info.parquet
+  seed_points_shapefile: null
+
+segmentation:
+  method: auto
+  stream_threshold_sqmi: 70
+  break_threshold_sqmi: 25
+  max_segment_length_mi: 5
+
+flood:
+  fldmn: 0.03
+  dh: 1
+  fldmx: 15
+  max_height_cap: 0
+  steady_state: true
+
+output:
+  segment_files_dir: FLDPLN_Py/outputs/amite/segment_files/
+  map_output: FLDPLN_Py/outputs/amite/bil/fldpln_map.bil
