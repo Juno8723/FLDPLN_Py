@@ -105,7 +105,18 @@ def build_auto_segments(
     stream_mask = find_stream_pixels(fac, strthr, fac_nodata)
     headwater_mask, confluence_mask = classify_headwater_confluence(stream_mask, fdr)
 
-    start_rows, start_cols = np.nonzero(headwater_mask | confluence_mask)
+    # Headwaters first (raster-scan order), then confluences (raster-scan
+    # order) -- matches the original's `seg_info0 = [[strhd; strcf] ...]`
+    # (Step 2), which processes the two groups separately rather than
+    # merging them into one spatially-interleaved scan order. Getting this
+    # order right matters even though it doesn't change *which* pixels end
+    # up in which segment (that's fully determined by trace_reach/
+    # subdivide_reach) -- it changes which segment gets which ID number,
+    # since IDs are assigned in traversal order.
+    hw_rows, hw_cols = np.nonzero(headwater_mask)
+    cf_rows, cf_cols = np.nonzero(confluence_mask)
+    start_rows = np.concatenate([hw_rows, cf_rows])
+    start_cols = np.concatenate([hw_cols, cf_cols])
 
     reaches: list[ReachPath] = []
     for reach_id, (r0, c0) in enumerate(zip(start_rows, start_cols), start=1):
