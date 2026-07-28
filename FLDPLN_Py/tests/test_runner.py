@@ -1,9 +1,8 @@
-"""Unit test for the .mat output writer, reusing the 3x3 synthetic scenario
-from test_flood_fill.py."""
+"""Unit test for the Parquet output writer, reusing the 3x3 synthetic
+scenario from test_flood_fill.py."""
 
 import numpy as np
 import pandas as pd
-from scipy.io import loadmat
 
 from PyFLDPLN_src.model.runner import output_basename, run_segment_to_disk
 from tests.test_flood_fill import BG, EAST, N_COLS, N_ROWS, SOUTH, build_grid, px
@@ -14,7 +13,7 @@ def test_output_basename_matches_original_convention():
     assert output_basename(fldmx=2.5, dh=0.5, seg_id=12) == "h2p5_dh0p5_seg12"
 
 
-def test_run_segment_to_disk_writes_matlab_compatible_mat(tmp_path):
+def test_run_segment_to_disk_writes_parquet(tmp_path):
     fil, fdr = build_grid()
     dem = fil.copy()  # DEM == FIL here -> fill_depth should be 0 everywhere
 
@@ -39,19 +38,19 @@ def test_run_segment_to_disk_writes_matlab_compatible_mat(tmp_path):
         segdr=tmp_path,
     )
 
-    assert out_path.name == "h5_dh5_seg1.mat"
+    assert out_path.name == "h5_dh5_seg1.parquet"
     assert out_path.exists()
-    assert not (tmp_path / "h5_dh5_seg1_tmp.mat").exists()  # cleaned up on completion
+    assert not (tmp_path / "h5_dh5_seg1_tmp.parquet").exists()  # cleaned up on completion
 
-    mat = loadmat(str(out_path))
-    fldpln = mat["fldpln"]
-    assert fldpln.shape == (6, 4)
-    assert np.allclose(fldpln[:, 3], 0.0)  # fill depth: DEM==FIL everywhere
+    df = pd.read_parquet(out_path)
+    assert list(df.columns) == ["fsp", "pixel", "dtf", "fill_depth"]
+    assert len(df) == 6
+    assert np.allclose(df["fill_depth"], 0.0)  # fill depth: DEM==FIL everywhere
 
-    by_pixel = {int(row[1]): (int(row[0]), row[2]) for row in fldpln}
+    by_pixel = {int(row.pixel): (int(row.fsp), row.dtf) for row in df.itertuples()}
     assert by_pixel[px(1, 2)] == (px(0, 1), 2.0)
 
-    # re-running should short-circuit (final .mat already exists) rather than recompute
+    # re-running should short-circuit (final .parquet already exists) rather than recompute
     out_path2 = run_segment_to_disk(
         seg_id=1, seg_row=seg_row, fil=fil, fdr=fdr, dem=dem,
         fldmn=0.1, fldmx=5, dh=5, mxht0=0, ssflg=False, bg=BG,

@@ -2,7 +2,7 @@
 # See PyFLDPLN_src/config.py for the full schema.
 
 run:
-  n_workers: null      # null = os.cpu_count() auto
+  n_workers: 8      # capped well below os.cpu_count() -- Amite segments can reach ~14.6M pixels each, and too many concurrent large segments risks OOM
   use_gpu: false
 
 paths:

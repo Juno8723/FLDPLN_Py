@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Optional
 
@@ -67,8 +68,8 @@ def run_model(cfg: PyfldplnConfig, seg_ids: Optional[list[int]] = None) -> None:
     """Run the per-segment flood-fill simulation, replacing the parfeval loop
     in fldpln_wrapper_v8.m that calls fldpln_model_v8 for each segment.
 
-    NOTE: runs segments sequentially for now (see model/runner.py docstring);
-    `run.n_workers` is not yet wired up to real parallelism.
+    `run.n_workers` (null = os.cpu_count()) controls segment-level
+    parallelism; see model/runner.py's docstring for how it's implemented.
     """
     fil, fil_info = read_raster(cfg.paths.fil_path)
     fdr, _ = read_raster(cfg.paths.fdr_path)
@@ -98,6 +99,7 @@ def run_model(cfg: PyfldplnConfig, seg_ids: Optional[list[int]] = None) -> None:
         n_cols=fil_info.cols,
         segdr=segdr,
         seg_ids=seg_ids,
+        n_workers=cfg.run.n_workers or os.cpu_count() or 1,
     )
 
 

@@ -1,6 +1,6 @@
 """DTF map merging, porting custom_floodplain_map.m.
 
-Merges per-segment flood-fill .mat outputs (written by
+Merges per-segment flood-fill Parquet outputs (written by
 PyFLDPLN_src/model/runner.py) into a single raster. Where multiple segments'
 floodplains cover the same pixel, the shallowest (minimum) DTF wins --
 matching the original's `min(ln0, max(fldmn, fldpln(:,2)))` merge rule.
@@ -12,29 +12,27 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
-from scipy.io import loadmat
+import pandas as pd
 
 from ..io.raster import RasterInfo, write_raster
 from ..model.runner import output_basename
 
 
 def _load_segment_pixel_dtf(segdr: Path, fldmx: float, dh: float, seg_id: int) -> tuple[np.ndarray, np.ndarray]:
-    """Load a segment's (pixel, DTF) arrays, from the final .mat if fully
-    processed, falling back to the checkpoint _tmp.mat otherwise (matching
-    the original's same fallback)."""
+    """Load a segment's (pixel, DTF) arrays, from the final .parquet if fully
+    processed, falling back to the checkpoint _tmp.parquet otherwise
+    (matching the original's same final-or-checkpoint fallback)."""
     basename = output_basename(fldmx, dh, seg_id)
-    final_path = segdr / f"{basename}.mat"
+    final_path = segdr / f"{basename}.parquet"
     if final_path.exists():
-        mat = loadmat(str(final_path))
-        fldpln = mat["fldpln"]
+        df = pd.read_parquet(final_path, columns=["pixel", "dtf"])
     else:
-        tmp_path = segdr / f"{basename}_tmp.mat"
+        tmp_path = segdr / f"{basename}_tmp.parquet"
         if not tmp_path.exists():
             raise FileNotFoundError(f"no output found for segment {seg_id} in {segdr}")
-        mat = loadmat(str(tmp_path))
-        fldpln = mat["fldpln_info"]
-    pixels = fldpln[:, 1].astype(np.int64)
-    dtf = fldpln[:, 2].astype(np.float64)
+        df = pd.read_parquet(tmp_path, columns=["pixel", "dtf"])
+    pixels = df["pixel"].to_numpy(dtype=np.int64)
+    dtf = df["dtf"].to_numpy(dtype=np.float64)
     return pixels, dtf
 
 
@@ -48,7 +46,7 @@ def merge_segments(
     segdr: Union[str, Path],
     seg_depth_cutoff: Optional[Union[float, dict[int, float]]] = None,
 ) -> np.ndarray:
-    """Merge per-segment flood-fill .mat outputs into a single DTF raster
+    """Merge per-segment flood-fill Parquet outputs into a single DTF raster
     (0 = background / never flooded), keeping the shallowest DTF on overlap.
 
     `seg_depth_cutoff`: optional per-segment (dict) or uniform (float) max
