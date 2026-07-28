@@ -200,3 +200,111 @@ def write_segment_raster(
         grid[rows, cols] = (seg_ids + 1).astype(dtype)  # +1: reserve 0 for background
 
     write_raster(path, grid, like=reference, dtype=dtype.name, nodata=0)
+
+
+def build_segment_geometries(seg_table: pd.DataFrame, n_cols: int, reference: RasterInfo):
+    """Build one LineString per segment, directly from each segment's own
+    downstream-ordered pixel chain (already known from build_segment_table's
+    attrs -- no raster-to-vector conversion needed).
+
+    Replaces the original workflow's manual GIS round-trip (arcpy
+    RasterToPolyline on str_segid.bil, then Dissolve by grid_code -- see
+    fldpln_wrapper_v8.m's `shpf_all`) with a direct construction: since we
+    already trace each reach's pixels in downstream order and know exactly
+    which contiguous run of pixels belongs to which final subsegment, each
+    segment's geometry is just those pixel centers connected into one line
+    -- equivalent to "dissolved by grid_code" by construction, since there's
+    exactly one line per segment ID to begin with.
+    """
+    import geopandas as gpd
+    from rasterio.transform import xy as transform_xy
+    from shapely.geometry import LineString
+
+    reach_pixels = seg_table.attrs["reach_pixels"]
+    pixel_segment_ids = seg_table.attrs["pixel_segment_ids"]
+
+    geoms: list = [None] * len(seg_table)
+    for pixels, seg_ids in zip(reach_pixels, pixel_segment_ids):
+        rows, cols = np.divmod(pixels, n_cols)
+        xs, ys = transform_xy(reference.transform, rows, cols)
+        xs = np.asarray(xs)
+        ys = np.asarray(ys)
+        for row_id in np.unique(seg_ids):
+            mask = seg_ids == row_id
+            pts = list(zip(xs[mask], ys[mask]))
+            if len(pts) == 1:
+                pts = pts * 2  # degenerate 1-pixel segment -> zero-length line (keeps geometry type uniform)
+            geoms[row_id] = LineString(pts)
+
+    return gpd.GeoDataFrame(
+        {"seg_id": seg_table.index + 1, "length": seg_table["length"].values},
+        geometry=geoms,
+        crs=reference.crs,
+    )
+
+
+def write_segment_shapefile(
+    path: str, seg_table: pd.DataFrame, n_cols: int, reference: RasterInfo
+) -> None:
+    """Write one polyline feature per segment (seg_id + length attributes)
+    -- see build_segment_geometries for why no raster-to-vector conversion
+    is needed."""
+    from pathlib import Path
+
+    gdf = build_segment_geometries(seg_table, n_cols, reference)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    gdf.to_file(path)
+
+
+def _van_der_corput(i: int, base: int = 2) -> float:
+    """i-th term of the van der Corput sequence: reverses i's base-`base`
+    digits after the point, e.g. base 2: 0,1,2,3,4,... -> 0, .5, .25, .75,
+    .125, ... -- consecutive integers map to maximally spread-out values in
+    [0, 1), unlike i/n which clusters neighbors together."""
+    val = 0.0
+    denom = 1.0
+    while i:
+        i, remainder = divmod(i, base)
+        denom *= base
+        val += remainder / denom
+    return val
+
+
+def write_segment_preview_png(
+    path: str, seg_table: pd.DataFrame, n_cols: int, reference: RasterInfo
+) -> None:
+    """Save a quick color-coded overview plot of the segment network,
+    cropped to its own extent (not the full, mostly-empty raster) -- a fast,
+    no-GIS-needed alternative to opening str_segid.bil in ArcGIS to eyeball
+    for a stray disconnected segment.
+    """
+    from pathlib import Path
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+
+    gdf = build_segment_geometries(seg_table, n_cols, reference)
+
+    # Consecutive seg_ids are frequently adjacent along the same physical
+    # reach (subdivision assigns consecutive row_ids to consecutive pieces
+    # of one reach -- see build_segment_table), so simply spreading hues
+    # evenly in seg_id order puts near-identical colors right next to each
+    # other spatially -- looks like a gradient, not distinct segments. The
+    # van der Corput sequence reorders which hue goes to which index so
+    # that numerically-close seg_ids land maximally far apart on the color
+    # wheel instead (e.g. index 0/1/2/3 -> hue 0/.5/.25/.75, not 0/.01/.02/.03).
+    n = len(gdf)
+    hues = np.array([_van_der_corput(i) for i in range(n)])
+    palette = ListedColormap(plt.cm.hsv(hues))
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    gdf.plot(ax=ax, column="seg_id", cmap=palette, categorical=True, linewidth=1.2)
+
+    ax.set_title(f"{len(gdf)} Segments")
+    ax.set_aspect("equal")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)

@@ -14,6 +14,7 @@ paths:
   segment_raster: FLDPLN_Py/outputs/wildcat/bil/str_segid.bil
   seg_info: FLDPLN_Py/outputs/wildcat/mat/seg_info.parquet
   seed_points_shapefile: null   # required only if segmentation.method == seedpoints
+  crs: null   # e.g. "EPSG:5070" -- override the input rasters' own CRS if it's missing/wrong; null = trust the .prj files as-is
 
 segmentation:
   method: auto                   # auto | seedpoints

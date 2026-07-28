@@ -11,6 +11,8 @@ dependencies = [
     "geopandas",
     "pyyaml",
     "numba",
+    "matplotlib",
+    "shapely",
 ]
 
 [project.optional-dependencies]

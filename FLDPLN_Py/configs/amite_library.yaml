@@ -14,6 +14,7 @@ paths:
   segment_raster: FLDPLN_Py/outputs/amite/bil/str_segid.bil
   seg_info: FLDPLN_Py/outputs/amite/mat/seg_info.parquet
   seed_points_shapefile: null
+  crs: null   # e.g. "EPSG:26915" (UTM 15N) -- override the input rasters' own CRS if it's missing/wrong; null = trust the .prj files as-is
 
 segmentation:
   method: auto

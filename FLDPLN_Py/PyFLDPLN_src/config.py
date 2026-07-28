@@ -44,6 +44,12 @@ class PathsConfig:
     segment_raster: str = "bil/str_segid.bil"
     seg_info: str = "mat/seg_info.parquet"
     seed_points_shapefile: Optional[str] = None
+    # Optional CRS override (e.g. "EPSG:26915") for all raster/vector I/O in
+    # this run. Different AOIs commonly sit in different projections (e.g.
+    # UTM zone per region) -- null (default) trusts whatever CRS is already
+    # embedded in the input .bil files' .prj sidecars; set this explicitly
+    # when that's missing, wrong, or you just want it stated up front.
+    crs: Optional[str] = None
 
     def _resolve(self, rel: str) -> Path:
         return self.home_dir / rel

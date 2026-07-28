@@ -29,8 +29,14 @@ class RasterInfo:
     dtype: str
 
 
-def read_raster(path: str | Path) -> tuple[np.ndarray, RasterInfo]:
-    """Read a single-band raster (e.g. dem/fil/fdr/fac .bil) into a 2-D array."""
+def read_raster(path: str | Path, crs: Optional[str] = None) -> tuple[np.ndarray, RasterInfo]:
+    """Read a single-band raster (e.g. dem/fil/fdr/fac .bil) into a 2-D array.
+
+    `crs` optionally overrides whatever CRS the file itself declares (or
+    lack thereof) -- e.g. `"EPSG:26915"` -- for AOIs where the .prj sidecar
+    is missing, wrong, or the user just wants to state the projection
+    explicitly (config's `paths.crs`) rather than trust the input file.
+    """
     with rasterio.open(path) as ds:
         arr = ds.read(1)
         info = RasterInfo(
@@ -39,15 +45,16 @@ def read_raster(path: str | Path) -> tuple[np.ndarray, RasterInfo]:
             pixel_size_x=ds.transform.a,
             pixel_size_y=-ds.transform.e,
             transform=ds.transform,
-            crs=ds.crs,
+            crs=rasterio.crs.CRS.from_user_input(crs) if crs else ds.crs,
             nodata=ds.nodata,
             dtype=arr.dtype.name,
         )
     return arr, info
 
 
-def read_raster_info(path: str | Path) -> RasterInfo:
-    """Read only the header/spatial info, without loading pixel data."""
+def read_raster_info(path: str | Path, crs: Optional[str] = None) -> RasterInfo:
+    """Read only the header/spatial info, without loading pixel data. See
+    `read_raster` for the `crs` override parameter."""
     with rasterio.open(path) as ds:
         return RasterInfo(
             rows=ds.height,
@@ -55,7 +62,7 @@ def read_raster_info(path: str | Path) -> RasterInfo:
             pixel_size_x=ds.transform.a,
             pixel_size_y=-ds.transform.e,
             transform=ds.transform,
-            crs=ds.crs,
+            crs=rasterio.crs.CRS.from_user_input(crs) if crs else ds.crs,
             nodata=ds.nodata,
             dtype=ds.dtypes[0],
         )
@@ -95,3 +102,12 @@ def write_raster(
     }
     with rasterio.open(path, "w", **profile) as ds:
         ds.write(array.astype(out_dtype), 1)
+        # Without this, GIS clients that don't have cached stats (e.g. ArcGIS
+        # Pro's default "DRA" symbology mode) fall back to computing the
+        # legend range from whatever's in the current display extent -- on a
+        # zoomed-in view that can show a tiny, misleading subset of the
+        # actual value range instead of the true min/max. Computing and
+        # persisting stats here (written to a sidecar .aux.xml/.stx, same
+        # convention the reference MATLAB/ArcGIS-produced rasters carry)
+        # makes every GIS client default to the correct full-dataset range.
+        ds.stats(indexes=1)
