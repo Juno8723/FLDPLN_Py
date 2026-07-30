@@ -104,18 +104,27 @@ def trace_exclusion_zone(
 
 @njit(cache=True)
 def _backfill_reach_nb(start_px, fil0, mxht, fil, fdr, flddat, bg, n_rows, n_cols,
-                        row_off, col_off, inflow, blocked):
+                        row_off, col_off, inflow, blocked, check_flooded):
     """JIT kernel for backfill_reach (see wrapper below for the docstring/
     semantics). `blocked` is always a (possibly empty) int64->boolean typed
     Dict -- the "no extra_blocked" call sites pass a shared empty one so this
     signature never needs an Optional type.
 
-    Traversal is an explicit stack (mimicking the original's
-    `frontier.pop()`/`.append()`, i.e. depth-first from the end) with the
-    exact same fixed 8-neighbor visit order as the original, so the
-    *sequence* of returned (pixel, depth) pairs -- not just the final set --
-    matches exactly; downstream code's insertion-order-sensitive tie-breaks
-    depend on this.
+    `check_flooded` toggles whether `flddat[npx] != 0.0` excludes a neighbor.
+    This must be True for the main per-iteration backfill (matches the
+    original's 3-column dat=[FDR,FIL,FLDMAP0] filter at
+    fldpln_model_v8.m:383-397) but False for backfill along a spillover path
+    (the original's 2-column dat=[FDR,FIL] filter at lines 766-784/818-836
+    has no flddat check at all -- it deliberately lets this reach re-discover
+    already-flooded pixels so the caller's "reclaim if shallower" step
+    (lines 844-868) can pull them onto a new, shallower path). Excluding
+    already-flooded pixels unconditionally here -- as a prior version of this
+    port did -- silently defeats that reclaim mechanism, since it never gets
+    the chance to see the pixel again.
+
+    Traversal is an explicit FIFO queue (breadth-first), matching the
+    original's `fldtmp` array: scanned front-to-back via an incrementing
+    index while newly-qualifying neighbors are appended at the end.
     """
     visited = Dict.empty(key_type=types.int64, value_type=types.boolean)
 
@@ -124,14 +133,15 @@ def _backfill_reach_nb(start_px, fil0, mxht, fil, fdr, flddat, bg, n_rows, n_col
     out_depth = np.empty(cap, dtype=np.float64)
     cnt = 0
 
-    fcap = 64
-    frontier = np.empty(fcap, dtype=np.int64)
-    frontier[0] = start_px
-    fsize = 1
+    qcap = 64
+    queue = np.empty(qcap, dtype=np.int64)
+    queue[0] = start_px
+    qsize = 1
+    head = 0
 
-    while fsize > 0:
-        fsize -= 1
-        px = frontier[fsize]
+    while head < qsize:
+        px = queue[head]
+        head += 1
         row = px // n_cols
         col = px % n_cols
         for k in range(8):
@@ -140,7 +150,9 @@ def _backfill_reach_nb(start_px, fil0, mxht, fil, fdr, flddat, bg, n_rows, n_col
             if not (0 <= nr < n_rows and 0 <= nc < n_cols):
                 continue
             npx = nr * n_cols + nc
-            if npx in visited or flddat[npx] != 0.0 or npx in blocked:
+            if npx in visited or npx in blocked:
+                continue
+            if check_flooded and flddat[npx] != 0.0:
                 continue
             if fdr[npx] != inflow[k]:
                 continue
@@ -163,13 +175,13 @@ def _backfill_reach_nb(start_px, fil0, mxht, fil, fdr, flddat, bg, n_rows, n_col
             out_depth[cnt] = depth
             cnt += 1
 
-            if fsize >= fcap:
-                fcap *= 2
-                new_frontier = np.empty(fcap, dtype=np.int64)
-                new_frontier[:fsize] = frontier[:fsize]
-                frontier = new_frontier
-            frontier[fsize] = npx
-            fsize += 1
+            if qsize >= qcap:
+                qcap *= 2
+                new_queue = np.empty(qcap, dtype=np.int64)
+                new_queue[:qsize] = queue[:qsize]
+                queue = new_queue
+            queue[qsize] = npx
+            qsize += 1
 
     return out_px[:cnt], out_depth[:cnt]
 
@@ -190,13 +202,21 @@ def backfill_reach(
     n_rows: int,
     n_cols: int,
     extra_blocked: set | None = None,
+    check_flooded: bool = True,
 ) -> list[tuple[int, float]]:
     """BFS/flood-fill outward from start_px, following only strict D8 inflow
     connections (neighbor's FDR must point into the current pixel), capped at
-    elevation <= mxht. A pixel is treated as off-limits if it's already in
-    the global flood zone (`flddat[px]` truthy) or listed in `extra_blocked`
-    (a small local set -- used by the "spilled-into path" backfill usage to
-    also exclude pixels already part of the new path itself).
+    elevation <= mxht. A pixel is off-limits if listed in `extra_blocked` (a
+    small local set -- used by the "spilled-into path" backfill usage to also
+    exclude pixels already part of the new path itself) or, when
+    `check_flooded` is True, already in the global flood zone (`flddat[px]`
+    truthy).
+
+    `check_flooded=False` is for the spillover-path backfill call site: the
+    original allows that reach to re-discover already-flooded pixels so a
+    later "reclaim if shallower" step can pull them onto a new, shorter path
+    (see `_backfill_reach_nb`'s docstring); the main per-iteration backfill
+    call site keeps the default `check_flooded=True`.
 
     NOTE: `flddat` is read directly (never copied) so this stays cheap to
     call once per boundary pixel per iteration, even on large rasters.
@@ -213,7 +233,7 @@ def backfill_reach(
 
     out_px, out_depth = _backfill_reach_nb(
         np.int64(start_px), float(fil0), float(mxht), fil, fdr, flddat, bg,
-        n_rows, n_cols, _ROW_OFF, _COL_OFF, _INFLOW, blocked,
+        n_rows, n_cols, _ROW_OFF, _COL_OFF, _INFLOW, blocked, check_flooded,
     )
     return list(zip(out_px.tolist(), out_depth.tolist()))
 
@@ -603,8 +623,12 @@ def run_segment(
                 strpts_order, n_rows, n_cols,
             )
             for fsp, fldzn, target_px in targets:
-                if flddat[target_px]:
-                    continue  # claimed by an earlier target this same pass
+                # NOTE: the original does not skip a target just because it's
+                # already flooded (e.g. by an earlier target's path/backfill
+                # this same pass) -- it still traces/backfills from it and
+                # lets the reclaim-if-shallower step below decide whether the
+                # new path wins. Skipping here would silently drop legitimate
+                # reclaim opportunities.
                 path = _trace_spillover_path(
                     target_px, fdr, fil, flddat, excluded, bg, fldzn, n_rows, n_cols
                 )
@@ -617,7 +641,7 @@ def run_segment(
                     v0 = elev + fldstg0
                     reach = backfill_reach(
                         px, elev, v0, fil, fdr, flddat, bg, n_rows, n_cols,
-                        extra_blocked=path_pixels,
+                        extra_blocked=path_pixels, check_flooded=False,
                     )
                     for rpx, rel_depth in reach:
                         if rpx not in new_entries or rel_depth < new_entries[rpx]:

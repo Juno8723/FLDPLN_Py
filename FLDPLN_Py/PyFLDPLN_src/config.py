@@ -102,7 +102,7 @@ class SegmentationConfig:
 
 @dataclass
 class FloodConfig:
-    fldmn: float = 0.03  # US standard minimum flood-stage depth
+    fldmn: float = 0.01  # minimum flood-stage depth floor
     dh: float = 3.0
     fldmx: float = 36.0
     max_height_cap: float = 0.0  # 0 = no cap (mxht)

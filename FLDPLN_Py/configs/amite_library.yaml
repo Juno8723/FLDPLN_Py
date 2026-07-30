@@ -23,7 +23,7 @@ segmentation:
   max_segment_length_mi: 5
 
 flood:
-  fldmn: 0.03
+  fldmn: 0.01
   dh: 1
   fldmx: 15
   max_height_cap: 0
