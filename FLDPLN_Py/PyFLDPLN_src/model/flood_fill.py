@@ -569,6 +569,8 @@ def run_segment(
     n_rows: int,
     n_cols: int,
     on_iteration: "callable | None" = None,
+    trace_pixels: "set[int] | None" = None,
+    trace_log: "list | None" = None,
 ) -> list[FloodEntry]:
     """Run the full flood-fill simulation for one segment, from DTF=0 up to
     fldmx in steps of dh. Returns the final list of FloodEntry (FSP, pixel,
@@ -577,6 +579,12 @@ def run_segment(
 
     `on_iteration(fldht, entries)` is called after each completed depth step,
     for checkpointing.
+
+    DEBUG-ONLY: if `trace_pixels` is given, every new-entry/reclaim event
+    touching one of those pixels, AND every iteration's boundary-membership
+    snapshot for those pixels, is appended to `trace_log`. Zero-cost/no-op
+    when trace_pixels is None -- temporary instrumentation for the
+    2026-08-13 FSP tie-break investigation, not meant to stay long-term.
     """
     strpts = trace_downstream(start_pixel, length, fdr, n_rows, n_cols)
     exclusion_zone = trace_exclusion_zone(end_pixel, fdr, n_rows, n_cols)
@@ -593,13 +601,21 @@ def run_segment(
     fldht = state.fldht
     bdy = _boundary_entries(state)
 
+    g_iter = 0
     for _ in range(itnum):
+        g_iter += 1
         fldht = fldht + min(dh, fldmx - fldht)
 
         # ---- Backfill: grow the flood zone from every current boundary pixel ----
         # NOTE: `flddat` (a plain float array, truthy iff flooded) is passed
         # directly everywhere below -- never copied -- so this stays cheap
         # per boundary pixel even on large rasters.
+        if trace_pixels is not None:
+            bdy_set = {e.pixel for e in bdy}
+            for tp in trace_pixels:
+                trace_log.append(dict(iteration=g_iter, pass_=0, event="boundary_check(pre-backfill)",
+                                       pixel=tp, fsp=None, dtf=None, old_dtf=None,
+                                       in_boundary=(tp in bdy_set)))
         start_idx = len(state.entries)
         for entry in bdy:
             fil0 = fil[entry.pixel]
@@ -610,18 +626,34 @@ def run_segment(
                 dtf = entry.dtf + rel_depth
                 _add_entry(state, FloodEntry(fsp=entry.fsp, pixel=px, dtf=dtf))
                 flddat[px] = max(fldmn, dtf)
+                if trace_pixels is not None and px in trace_pixels:
+                    trace_log.append(dict(iteration=g_iter, pass_=0, event="new(backfill)",
+                                           pixel=px, fsp=entry.fsp, dtf=dtf, old_dtf=None))
 
         _refresh_boundary(state, flddat, start_idx, n_rows, n_cols)
         bdy = _boundary_entries(state)
 
         # ---- Spillover (repeated to exhaustion if ssflg / 'steady state') ----
         spill_flg = True
+        pass_num = 0
         while spill_flg:
+            pass_num += 1
+            if trace_pixels is not None:
+                bdy_set = {e.pixel for e in bdy}
+                for tp in trace_pixels:
+                    trace_log.append(dict(iteration=g_iter, pass_=pass_num, event="boundary_check(pre-spillover)",
+                                           pixel=tp, fsp=None, dtf=None, old_dtf=None,
+                                           in_boundary=(tp in bdy_set)))
             n_before = len(state.entries)
             targets = _find_spillover_targets(
                 bdy, fil, flddat, excluded, bg, fldht, mxht0_eff,
                 strpts_order, n_rows, n_cols,
             )
+            if trace_pixels is not None:
+                for fsp_t, fldzn_t, target_px_t in targets:
+                    if target_px_t in trace_pixels:
+                        trace_log.append(dict(iteration=g_iter, pass_=pass_num, event="target_candidate",
+                                               pixel=target_px_t, fsp=fsp_t, dtf=fldzn_t, old_dtf=None))
             for fsp, fldzn, target_px in targets:
                 # NOTE: the original does not skip a target just because it's
                 # already flooded (e.g. by an earlier target's path/backfill
@@ -650,15 +682,35 @@ def run_segment(
                 for px, rel_depth in new_entries.items():
                     dtf = rel_depth + fldzn
                     if flddat[px]:
-                        if flddat[px] > dtf:
-                            # reclaim: a shallower path reaches this pixel
-                            e = state.entries[state.pixel_index[px]]
+                        e = state.entries[state.pixel_index[px]]
+                        if e.dtf > dtf:
+                            # reclaim: a shallower path reaches this pixel.
+                            # Compares against the entry's own raw DTF
+                            # (matching MATLAB's fldpln_info(:,3), which stays
+                            # unfloored until the very end of the segment) --
+                            # NOT flddat[px], which is floored to fldmn on
+                            # every write. Using the floored value here made
+                            # any two candidates whose raw DTF are both below
+                            # fldmn compare as "tied at fldmn" and always
+                            # reclaim regardless of which was truly deeper,
+                            # turning ties (and near-ties) into "whichever
+                            # candidate is processed last wins" instead of
+                            # "whichever is truly shallowest wins".
+                            old_dtf = flddat[px]
+                            old_fsp = e.fsp
                             e.fsp = fsp
                             e.dtf = dtf
                             flddat[px] = max(fldmn, dtf)
+                            if trace_pixels is not None and px in trace_pixels:
+                                trace_log.append(dict(iteration=g_iter, pass_=pass_num, event="reclaim",
+                                                       pixel=px, fsp=fsp, dtf=dtf, old_dtf=old_dtf,
+                                                       old_fsp=old_fsp))
                     else:
                         _add_entry(state, FloodEntry(fsp=fsp, pixel=px, dtf=dtf))
                         flddat[px] = max(fldmn, dtf)
+                        if trace_pixels is not None and px in trace_pixels:
+                            trace_log.append(dict(iteration=g_iter, pass_=pass_num, event="new(spillover)",
+                                                   pixel=px, fsp=fsp, dtf=dtf, old_dtf=None))
 
             _refresh_boundary(state, flddat, n_before, n_rows, n_cols)
             bdy = _boundary_entries(state)
