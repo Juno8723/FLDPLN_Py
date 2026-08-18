@@ -571,6 +571,8 @@ def run_segment(
     on_iteration: "callable | None" = None,
     trace_pixels: "set[int] | None" = None,
     trace_log: "list | None" = None,
+    capture_boundary_at: "set[tuple[int, int]] | None" = None,
+    boundary_snapshots: "dict | None" = None,
 ) -> list[FloodEntry]:
     """Run the full flood-fill simulation for one segment, from DTF=0 up to
     fldmx in steps of dh. Returns the final list of FloodEntry (FSP, pixel,
@@ -644,6 +646,16 @@ def run_segment(
                     trace_log.append(dict(iteration=g_iter, pass_=pass_num, event="boundary_check(pre-spillover)",
                                            pixel=tp, fsp=None, dtf=None, old_dtf=None,
                                            in_boundary=(tp in bdy_set)))
+            if capture_boundary_at is not None and (g_iter, pass_num) in capture_boundary_at:
+                boundary_snapshots[(g_iter, pass_num)] = dict(
+                    bdy=[(e.pixel, e.fsp, e.dtf) for e in bdy],
+                    flddat=flddat.copy(),
+                    excluded=excluded.copy(),
+                    strpts_order=dict(strpts_order),
+                    fldht=fldht,
+                    mxht0_eff=mxht0_eff,
+                )
+
             n_before = len(state.entries)
             targets = _find_spillover_targets(
                 bdy, fil, flddat, excluded, bg, fldht, mxht0_eff,
