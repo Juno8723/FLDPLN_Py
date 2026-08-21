@@ -14,3 +14,15 @@ __pycache__/
 .DS_Store
 *.swp
 .claude/
+
+# large original reference libraries (kept out of git, available on external drive)
+FLDPLN_MatlabRaw/ARB_original_library/
+FLDPLN_MatlabRaw/ARB_tiled10km_snz_library/
+FLDPLN_MatlabRaw/FloodMaps/Map_Aug2016/ARB_tiled10km_snz_library/
+FLDPLN_MatlabRaw/FloodMaps/Map_Aug2016/OutputMap_Aug11_Aug13_2016/
+FLDPLN_MatlabRaw/FloodMaps/Map_Aug2016/Library_Segments/
+FLDPLN_MatlabRaw/Gauge/
+FLDPLN_MatlabRaw/Stream_order/
+
+# jupyter autosave checkpoints
+.ipynb_checkpoints/

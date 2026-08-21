@@ -87,11 +87,15 @@ def write_raster(
     like: RasterInfo,
     dtype: Optional[str] = None,
     nodata: Optional[float] = None,
+    driver: str = "EHdr",
 ) -> None:
-    """Write a 2-D array to a new ESRI BIL raster, copying spatial info from ``like``."""
+    """Write a 2-D array to a new raster, copying spatial info from ``like``.
+    ``driver`` defaults to ESRI BIL ("EHdr", this project's usual output
+    format) -- pass "GTiff" for a GeoTIFF, e.g. to match the gauge-mapping
+    stage's reference output format (FloodMap_h15dh1_Amite.tif)."""
     out_dtype = dtype or array.dtype.name
     profile = {
-        "driver": "EHdr",
+        "driver": driver,
         "height": like.rows,
         "width": like.cols,
         "count": 1,

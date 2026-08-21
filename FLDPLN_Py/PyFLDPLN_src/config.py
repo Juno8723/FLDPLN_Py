@@ -113,11 +113,17 @@ class FloodConfig:
 class OutputConfig:
     segment_files_dir: str = "segment_files/"
     map_output: str = "bil/fldpln_map.bil"
+    library_dir: str = "library/"
+    tile_size_px: int = 2000  # ~20km square tiles at 10m pixels; matches the
+    # original toolkit's tileSize=0.2 (degrees, ~2000px at its 0.0001deg
+    # cell size) in spirit -- tune per-AOI, bigger AOIs may want larger tiles
 
     def resolve(self, home_dir: Path) -> "OutputConfig":
         return OutputConfig(
             segment_files_dir=str(home_dir / self.segment_files_dir),
             map_output=str(home_dir / self.map_output),
+            library_dir=str(home_dir / self.library_dir),
+            tile_size_px=self.tile_size_px,
         )
 
 

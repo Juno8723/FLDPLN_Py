@@ -32,3 +32,4 @@ flood:
 output:
   segment_files_dir: FLDPLN_Py/outputs/amite/segment_files/
   map_output: FLDPLN_Py/outputs/amite/bil/fldpln_map.bil
+  library_dir: FLDPLN_Py/outputs/amite/library/

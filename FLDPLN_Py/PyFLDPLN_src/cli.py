@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -13,7 +15,11 @@ import pandas as pd
 from .config import PyfldplnConfig, load_config
 from .io.raster import read_raster, read_raster_info
 from .io.vector import read_shapefile_fields
+from .library.fsp_table import add_downstream_distances, build_fsp_table
+from .library.library_files import build_segment_library_relations
+from .library.tiling import build_tiles, compute_relations_pixel_extents
 from .mapping.create_map import create_fldpln_map
+from .mapping.gauge_map import create_gauge_flood_map
 from .model.runner import run_library
 from .segmentation.auto import build_auto_segments
 from .segmentation.network_core import (
@@ -22,6 +28,7 @@ from .segmentation.network_core import (
     write_segment_shapefile,
 )
 from .segmentation.seedpoints import build_seedpoint_segments
+from .segmentation.stream_order import assign_stream_order, build_stream_order_info
 from .segmentation.units import miles_to_pixels, sqmiles_to_pixels
 
 
@@ -195,6 +202,140 @@ def create_map(
     print(f"DTF map written to {output.map_output}")
 
 
+def build_library(
+    cfg: PyfldplnConfig,
+    seg_ids: Optional[list[int]] = None,
+    exclude_seg_ids: Optional[list[int]] = None,
+) -> None:
+    """Reorganize per-segment flood-fill output (model/runner.py) into a
+    map-coordinate library: fsp_info.csv / segment_info.csv /
+    stream_order_info.csv / CellSizeSpatialReference.json (matching
+    fldpln_header.py's schemas exactly) plus one FSP-FPP relation Parquet
+    per segment (schema-compatible with the existing tiled-library .snz
+    format, see library/library_files.py).
+
+    Replaces fsp_info_table.m + library_files.m, and automates the stream-
+    order assignment step that Tools/ReorganizeLibrary.ipynb otherwise
+    requires doing by hand in ArcGIS (see segmentation/stream_order.py).
+    Tiling (grouping relations into fixed-size geographic tiles for fast
+    lookup) is a later, separate step -- not run here.
+    """
+    fil, fil_info = read_raster(cfg.paths.fil_path, crs=cfg.paths.crs)
+    fdr, fdr_info = read_raster(cfg.paths.fdr_path, crs=cfg.paths.crs)
+    fil = fil.astype(np.float64).ravel()
+    fdr = fdr.ravel()
+    n_rows, n_cols = fil_info.rows, fil_info.cols
+
+    seg_info = pd.read_parquet(cfg.paths.seg_info_path)
+    seg_ids = _resolve_seg_ids(len(seg_info), seg_ids, exclude_seg_ids)
+
+    print("building FSP table ...")
+    fsp_df = build_fsp_table(seg_info, fil, fdr, fdr_info.transform, n_rows, n_cols)
+
+    print("computing downstream distances ...")
+    seg_df = add_downstream_distances(seg_info, fsp_df)
+
+    print("assigning stream order (automated level-path method) ...")
+    order = assign_stream_order(seg_info)
+    fsp_df["StrOrd"] = order[fsp_df["SegId"].to_numpy() - 1]
+    seg_df["StrOrd"] = order
+    str_ord_df = build_stream_order_info(seg_info, order, fsp_df)
+    print(f"  {len(set(order.tolist()))} distinct stream order(s) assigned")
+
+    lib_dir = Path(cfg.output.resolve(cfg.paths.home_dir).library_dir)
+    lib_dir.mkdir(parents=True, exist_ok=True)
+
+    fsp_out = fsp_df[["FspId", "FspX", "FspY", "SegId", "FilledElev", "DsDist", "StrOrd"]]
+    fsp_out.to_csv(lib_dir / "fsp_info.csv", index=False)
+    seg_df[["SegId", "CellCount", "DsSegId", "Length", "DsDist", "StrOrd"]].to_csv(
+        lib_dir / "segment_info.csv", index=False
+    )
+    str_ord_df.to_csv(lib_dir / "stream_order_info.csv", index=False)
+
+    with open(lib_dir / "CellSizeSpatialReference.json", "w") as jf:
+        json.dump(
+            {
+                "CellSize": fil_info.pixel_size_x,
+                "SpatialReference": fil_info.crs.to_wkt() if fil_info.crs else "",
+            },
+            jf,
+        )
+    print(f"library info files written to {lib_dir}")
+
+    relations_dir = lib_dir / "relations"
+    relations_dir.mkdir(parents=True, exist_ok=True)
+    segdr = cfg.output.resolve(cfg.paths.home_dir).segment_files_dir
+    for seg_id in seg_ids:
+        rel = build_segment_library_relations(
+            seg_id, fsp_df, cfg.flood.fldmx, cfg.flood.dh, segdr, n_cols
+        )
+        rel.to_parquet(relations_dir / f"seg{seg_id}.parquet", index=False)
+        print(f"  segment {seg_id}: {len(rel)} relations -> {relations_dir / f'seg{seg_id}.parquet'}")
+
+
+def tile_library(cfg: PyfldplnConfig) -> None:
+    """Bucket the FSP-FPP relations already written by build_library() into
+    fixed-size geographic tiles (see library/tiling.py). Reads
+    library_dir/fsp_info.csv and library_dir/relations/seg*.parquet; writes
+    library_dir/FLDPLN_tiled_*.snz + the two tile/fsp index CSVs.
+    """
+    lib_dir = Path(cfg.output.resolve(cfg.paths.home_dir).library_dir)
+    fsp_df = pd.read_csv(lib_dir / "fsp_info.csv")
+
+    relations_dir = lib_dir / "relations"
+    relations_paths = {
+        int(p.stem.removeprefix("seg")): p for p in relations_dir.glob("seg*.parquet")
+    }
+    if not relations_paths:
+        raise FileNotFoundError(f"no relation Parquet files found in {relations_dir}")
+    print(f"computing pixel extents for {len(relations_paths)} segment relation file(s) ...")
+    seg_extents = compute_relations_pixel_extents(relations_paths)
+
+    fdr_info = read_raster_info(cfg.paths.fdr_path, crs=cfg.paths.crs)
+    build_tiles(
+        seg_extents=seg_extents,
+        fsp_df=fsp_df,
+        tile_size_px=cfg.output.tile_size_px,
+        pixel_size=fdr_info.pixel_size_x,
+        transform=fdr_info.transform,
+        out_dir=lib_dir,
+    )
+
+
+def gauge_map(
+    cfg: PyfldplnConfig,
+    gauges_csv: str,
+    snap_dist: float,
+    out_path: Optional[str] = None,
+    x_field: str = "x",
+    y_field: str = "y",
+) -> None:
+    """Event-specific gauge-based flood map (stage 3), reading gauge stages
+    from a plain CSV (export AmiteGauges.xlsx's 'Available' sheet, or
+    equivalent, to CSV first -- see mapping/gauge_map.py's module docstring
+    for why no Excel/live-fetch machinery is built in here). `gauges_csv`
+    must have an 'x'/'y' (or --x-field/--y-field) column pair in the
+    library's own coordinate system, and a 'stage_elevation' column in the
+    same vertical datum/units as fsp_info.csv's FilledElev (feet).
+    """
+    lib_dir = Path(cfg.output.resolve(cfg.paths.home_dir).library_dir)
+    fdr_info = read_raster_info(cfg.paths.fdr_path, crs=cfg.paths.crs)
+    gauges = pd.read_csv(gauges_csv)
+
+    if out_path is None:
+        out_path = str(lib_dir / "gauge_flood_map.tif")
+
+    create_gauge_flood_map(
+        lib_dir=lib_dir,
+        gauges=gauges,
+        snap_dist=snap_dist,
+        raster_info=fdr_info,
+        out_path=out_path,
+        x_field=x_field,
+        y_field=y_field,
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="PyFLDPLN_src")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -224,6 +365,31 @@ def main(argv: Optional[list[str]] = None) -> int:
         "of --segments/the default 'all'",
     )
 
+    p_lib = sub.add_parser(
+        "build-library", help="reorganize segment output into a map-coordinate library"
+    )
+    p_lib.add_argument("config", help="path to YAML config file")
+    p_lib.add_argument(
+        "--segments", help="comma-separated 1-based segment IDs to include (default: all)"
+    )
+    p_lib.add_argument(
+        "--exclude-segments",
+        help="comma-separated 1-based segment IDs to skip -- applied on top "
+        "of --segments/the default 'all'",
+    )
+
+    p_tile = sub.add_parser("tile-library", help="bucket library relations into geographic tiles")
+    p_tile.add_argument("config", help="path to YAML config file")
+
+    p_gauge = sub.add_parser("gauge-map", help="build an event-specific gauge-based flood map")
+    p_gauge.add_argument("config", help="path to YAML config file")
+    p_gauge.add_argument("gauges_csv", help="CSV of gauge x,y,stage_elevation (see gauge_map() docstring)")
+    p_gauge.add_argument("--snap-dist", type=float, required=True,
+                          help="max gauge-to-FSP snap distance, in the library's own CRS units")
+    p_gauge.add_argument("--out", help="output GeoTIFF path (default: <library_dir>/gauge_flood_map.tif)")
+    p_gauge.add_argument("--x-field", default="x")
+    p_gauge.add_argument("--y-field", default="y")
+
     args = parser.parse_args(argv)
 
     if args.command == "build-segments":
@@ -251,6 +417,26 @@ def main(argv: Optional[list[str]] = None) -> int:
             else None
         )
         create_map(cfg, seg_ids=seg_ids, exclude_seg_ids=exclude_seg_ids)
+    elif args.command == "build-library":
+        cfg = load_config(args.config)
+        seg_ids = (
+            [int(s) for s in args.segments.split(",")] if args.segments else None
+        )
+        exclude_seg_ids = (
+            [int(s) for s in args.exclude_segments.split(",")]
+            if args.exclude_segments
+            else None
+        )
+        build_library(cfg, seg_ids=seg_ids, exclude_seg_ids=exclude_seg_ids)
+    elif args.command == "tile-library":
+        cfg = load_config(args.config)
+        tile_library(cfg)
+    elif args.command == "gauge-map":
+        cfg = load_config(args.config)
+        gauge_map(
+            cfg, args.gauges_csv, args.snap_dist,
+            out_path=args.out, x_field=args.x_field, y_field=args.y_field,
+        )
 
     return 0
 
