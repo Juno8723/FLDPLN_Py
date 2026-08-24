@@ -13,6 +13,7 @@ dependencies = [
     "numba",
     "matplotlib",
     "shapely",
+    "scipy",
 ]
 
 [project.optional-dependencies]

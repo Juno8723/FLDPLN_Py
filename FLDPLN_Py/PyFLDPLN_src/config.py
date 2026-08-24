@@ -37,11 +37,11 @@ class RunConfig:
 @dataclass
 class PathsConfig:
     home_dir: Path
-    dem: str = "bil/dem.bil"
-    fil: str = "bil/fil.bil"
-    fdr: str = "bil/fdr.bil"
-    fac: str = "bil/fac.bil"
-    segment_raster: str = "bil/str_segid.bil"
+    dem: str
+    fil: str
+    fdr: str
+    fac: str
+    segment_raster: str
     seg_info: str = "mat/seg_info.parquet"
     seed_points_shapefile: Optional[str] = None
     # Optional CRS override (e.g. "EPSG:26915") for all raster/vector I/O in
@@ -129,8 +129,8 @@ class OutputConfig:
 
 @dataclass
 class PyfldplnConfig:
+    paths: PathsConfig
     run: RunConfig = field(default_factory=RunConfig)
-    paths: PathsConfig = field(default_factory=lambda: PathsConfig(home_dir=Path(".")))
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
     flood: FloodConfig = field(default_factory=FloodConfig)
     output: OutputConfig = field(default_factory=OutputConfig)

@@ -1,0 +1,30 @@
+[project]
+name = "PyFLDPLN_src"
+version = "0.1.0"
+description = "Python port of the FLDPLN floodplain mapping model (Kastens 2008)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "rasterio",
+    "geopandas",
+    "pyyaml",
+    "numba",
+    "matplotlib",
+    "shapely",
+    "scipy",
+]
+
+[project.optional-dependencies]
+gpu = ["cupy"]
+
+[project.scripts]
+PyFLDPLN_src = "PyFLDPLN_src.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["PyFLDPLN_src*"]

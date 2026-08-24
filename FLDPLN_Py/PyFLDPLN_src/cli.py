@@ -97,7 +97,7 @@ def _print_shortest_segments(seg_table, segment_raster_path, n: int = 5) -> None
     dissolve, eyeball the result for a stray disconnected sliver) with a
     printed shortlist. This isn't anomaly *detection* (a length threshold
     tuned to flag genuine outliers doesn't hold up across differently-sized
-    AOIs -- e.g. plain IQR fencing never fires on real Wildcat/Amite length
+    AOIs -- e.g. plain IQR fencing never fires on real Amite length
     distributions), just a convenience pointer to where to look first; the
     actual judgment call is still the user's, same as it always was.
     """

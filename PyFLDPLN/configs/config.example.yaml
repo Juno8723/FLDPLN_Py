@@ -1,0 +1,47 @@
+# PyFLDPLN_src config template.
+# Copy this file (e.g. `cp config.example.yaml my_aoi.yaml`) and edit the
+# paths below to point at your own DEM/FIL/FDR/FAC. See PyFLDPLN_src/config.py
+# for the full schema and every field's default.
+
+run:
+  n_workers: 8      # CPU workers for segment-level parallelism; null = os.cpu_count() (all cores)
+  use_gpu: false     # not yet implemented -- leave false; the flood-fill core is CPU/numba only
+
+paths:
+  # Root directory every other path below is resolved relative to.
+  home_dir: /path/to/your/project/
+
+  # Inputs you must already have: a filled DEM (fil), D8 flow direction (fdr,
+  # ESRI codes 1/2/4/8/16/32/64/128), and D8 flow accumulation (fac) -- all
+  # same extent/resolution/CRS, as .bil (or any GDAL-readable single-band
+  # raster rasterio can open).
+  dem: my_data/dem.bil
+  fil: my_data/fil.bil
+  fdr: my_data/fdr.bil
+  fac: my_data/fac.bil
+
+  # Outputs written by `build-segments` (read back by every later stage).
+  segment_raster: outputs/bil/str_segid.bil
+  seg_info: outputs/mat/seg_info.parquet
+
+  seed_points_shapefile: null   # required only if segmentation.method == seedpoints
+  crs: null   # e.g. "EPSG:26915" -- override the input rasters' own CRS if it's missing/wrong; null = trust the .prj files as-is
+
+segmentation:
+  method: auto                   # auto | seedpoints
+  stream_threshold_sqmi: 70      # minimum drainage area to start a stream
+  break_threshold_sqmi: 25       # minimum drainage-area jump to start a new segment at a confluence
+  max_segment_length_mi: 5       # maximum length before a segment is split
+
+flood:
+  fldmn: 0.01   # minimum flood-stage depth floor
+  dh: 1         # flood-stage step size
+  fldmx: 15     # maximum flood stage to simulate
+  max_height_cap: 0    # 0 = no cap
+  steady_state: true
+
+output:
+  segment_files_dir: outputs/segment_files/
+  map_output: outputs/bil/fldpln_map.bil
+  library_dir: outputs/library/
+  tile_size_px: 2000   # ~20km square tiles at 10m pixels; tune per-AOI, bigger AOIs may want larger tiles

@@ -31,7 +31,7 @@ REALMAX_SINGLE = float(np.finfo(np.float32).max)
 
 # Numba-friendly (int64) copies of d8's neighbor-offset tables, and plain
 # Python-int tuples of the same for the handful of call sites that stay in
-# pure Python -- profiling on real Wildcat segments showed the *generator*
+# pure Python -- profiling on real segments showed the *generator*
 # form (d8-adjacent `_in_bounds_neighbors`, used millions of times per
 # segment) was itself the single largest cost, ahead of any one algorithm
 # step, purely from CPython generator/yield overhead -- so every hot loop
@@ -373,7 +373,7 @@ def _spillover_claims_nb(
     n_rows, n_cols, row_off, col_off,
 ):
     """JIT kernel for the O(boundary * 8) claims-competition scan -- profiling
-    on real Wildcat segments showed this was the single largest cost (~2/3 of
+    on real segments showed this was the single largest cost (~2/3 of
     total run_segment time on a 700k-pixel segment), more than backfill_reach,
     because the spillover while-loop can re-run this scan many times per
     depth-step when `ssflg` (steady state) is set.
