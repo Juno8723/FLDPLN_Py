@@ -24,6 +24,15 @@ inherit them via copy-on-write instead of being pickled/copied per task --
 essential since these arrays can be tens to hundreds of millions of pixels on
 real AOIs. This only works on platforms where 'fork' is available (Linux; not
 Windows, not macOS's default), which matches this project's HPC target.
+
+`use_gpu` (from `run.use_gpu`) is safe to combine with `n_workers>1`: cupy is
+only ever imported lazily inside flood_fill.py's spillover-claims step, which
+only actually runs inside each forked worker (or the main process, if
+n_workers<=1) -- so the parent never initializes a CUDA context before
+forking, avoiding the classic "CUDA + fork" crash. Each worker then opens its
+own CUDA context and shares the one physical GPU via the driver's own
+scheduling; whether that's a net win over CPU-only at high n_workers is
+untuned/unbenchmarked so far.
 """
 
 from __future__ import annotations
@@ -66,6 +75,7 @@ def run_segment_to_disk(
     n_rows: int,
     n_cols: int,
     segdr: Path,
+    use_gpu: bool = False,
 ) -> Path:
     """Run the flood-fill simulation for one segment and write its output
     (skipping segments already fully processed, matching the original's
@@ -111,6 +121,7 @@ def run_segment_to_disk(
         bg=bg,
         n_rows=n_rows,
         n_cols=n_cols,
+        use_gpu=use_gpu,
         on_iteration=checkpoint,
     )
 
@@ -137,7 +148,7 @@ def _run_one_segment(seg_id: int) -> tuple[int, "Path | None", "str | None"]:
         path = run_segment_to_disk(
             seg_id, seg_row, ctx["fil"], ctx["fdr"], ctx["dem"],
             ctx["fldmn"], ctx["fldmx"], ctx["dh"], ctx["mxht0"], ctx["ssflg"],
-            ctx["bg"], ctx["n_rows"], ctx["n_cols"], ctx["segdr"],
+            ctx["bg"], ctx["n_rows"], ctx["n_cols"], ctx["segdr"], ctx["use_gpu"],
         )
         return seg_id, path, None
     except Exception as exc:  # noqa: BLE001 -- reported to the parent, not swallowed
@@ -167,6 +178,7 @@ def run_library(
     segdr: Path,
     seg_ids: list[int] | None = None,
     n_workers: int = 1,
+    use_gpu: bool = False,
 ) -> list[Path]:
     """Run the flood-fill simulation for every segment in seg_info (or just
     `seg_ids` if given). seg_id is the 1-based row position in seg_info
@@ -189,7 +201,7 @@ def run_library(
             seg_row = seg_info.iloc[seg_id - 1]
             path = run_segment_to_disk(
                 seg_id, seg_row, fil, fdr, dem, fldmn, fldmx, dh, mxht0, ssflg, bg,
-                n_rows, n_cols, segdr,
+                n_rows, n_cols, segdr, use_gpu,
             )
             outputs.append(path)
             print(f"segment {seg_id} of {len(seg_ids)} completed -> {path.name}")
@@ -206,7 +218,7 @@ def run_library(
     _worker_ctx.update(
         seg_info=seg_info, fil=fil, fdr=fdr, dem=dem,
         fldmn=fldmn, fldmx=fldmx, dh=dh, mxht0=mxht0, ssflg=ssflg, bg=bg,
-        n_rows=n_rows, n_cols=n_cols, segdr=segdr,
+        n_rows=n_rows, n_cols=n_cols, segdr=segdr, use_gpu=use_gpu,
     )
     outputs_by_id: dict[int, Path] = {}
     failures: list[tuple[int, str]] = []

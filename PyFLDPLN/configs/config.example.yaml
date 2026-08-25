@@ -5,7 +5,7 @@
 
 run:
   n_workers: 8      # CPU workers for segment-level parallelism; null = os.cpu_count() (all cores)
-  use_gpu: false     # not yet implemented -- leave false; the flood-fill core is CPU/numba only
+  use_gpu: false     # optional cupy-accelerated flood-fill path; validated bit-identical to CPU but currently slower at production scale -- leave false unless testing
 
 paths:
   # Root directory every other path below is resolved relative to.

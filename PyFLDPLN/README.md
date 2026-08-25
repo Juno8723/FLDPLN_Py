@@ -4,8 +4,8 @@ Python port of the FLDPLN floodplain-mapping model (Kastens 2008). Given a
 filled DEM, D8 flow direction, and D8 flow accumulation for your area of
 interest, this runs the full pipeline end to end: per-segment flood-fill
 simulation → map-coordinate library reorganization + geographic tiling →
-gauge-driven event flood map. No ArcGIS or MATLAB required; runs on CPU
-(GPU acceleration is under active development, see "Known limitations").
+gauge-driven event flood map. No ArcGIS or MATLAB required; runs on CPU by
+default, with an optional GPU-accelerated backend (see "Known limitations").
 
 This folder is a self-contained release snapshot — everything needed to run
 the pipeline, nothing else (no source data, no development history).
@@ -50,9 +50,11 @@ This installs the `PyFLDPLN_src` console command and all required
 dependencies: `numpy`, `pandas`, `pyarrow`, `rasterio`, `geopandas`,
 `pyyaml`, `numba`, `matplotlib`, `shapely`, `scipy`.
 
-> **GPU**: `pip install -e ".[gpu]"` adds `cupy` for the GPU-accelerated
-> flood-fill backend, currently under development. For now leave
-> `run.use_gpu: false` — the CPU (numba-JIT) path is the validated one.
+> **GPU**: `pip install -e ".[gpu]"` adds `cupy` for the optional GPU-accelerated
+> flood-fill backend (`run.use_gpu: true`). It's been validated bit-identical to
+> the CPU path (80/80 segments, 487M+ output rows, zero mismatches) but is
+> currently *slower* than CPU at production scale — leave `use_gpu: false`
+> unless you're experimenting; the CPU (numba-JIT) path is the recommended one.
 
 ## 4. Configure your AOI
 
@@ -140,5 +142,7 @@ outputs/
   computed depth values — only a small number of source-attribution labels,
   typically well under 1% of points. See `PyFLDPLN_src/model/flood_fill.py`
   and `segmentation/stream_order.py` for where this shows up.
-- **GPU acceleration** (`run.use_gpu` / the `cupy` backend) is under active
-  development and not yet validated — use the CPU path for now.
+- **GPU acceleration** (`run.use_gpu` / the `cupy` backend) is correctness-validated
+  (bit-identical to CPU) but currently *slower* than CPU at production scale —
+  the CPU (numba-JIT) path remains the recommended default. GPU work is
+  ongoing; a future release may change this.

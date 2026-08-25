@@ -174,6 +174,7 @@ def run_model(
         segdr=segdr,
         seg_ids=seg_ids,
         n_workers=cfg.run.n_workers or os.cpu_count() or 1,
+        use_gpu=cfg.run.use_gpu,
     )
 
 
