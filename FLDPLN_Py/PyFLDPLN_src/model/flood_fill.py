@@ -447,6 +447,163 @@ def _spillover_claims_nb(
     return out_px, out_fsp, out_dtf
 
 
+@njit(cache=True)
+def _spillover_claims_candidates_nb(
+    bdy_pixels, bdy_dtf, bdy_fsp, fil, flooded_mask, excluded, bg, fldht, mxht0,
+    n_rows, n_cols, row_off, col_off,
+):
+    """JIT kernel for spillover candidate generation: every boundary pixel's
+    8 neighbors, filtered down to the ones a "spill" is actually allowed to
+    reach (in bounds, not excluded, not already flooded, valid/reachable
+    elevation) -- the exact same gather-and-filter logic as
+    `_spillover_claims_nb`'s loop body, just stopping short of the claims
+    dict so the (much smaller, already-filtered) result can be handed to
+    either that dict-based reduction or `_spillover_claims_reduce`'s
+    array-based one (GPU or numpy) without ever transferring the full
+    fil/flooded_mask/excluded rasters anywhere.
+
+    A first cut at this (see git history) did the gather/filter with plain
+    vectorized numpy instead of a compiled loop -- correct, but ~4x slower
+    per call than this kernel in practice (confirmed against a real Amite
+    segment), because numpy materializes several full (boundary x 8)
+    intermediate arrays (in_bounds, nr, nc, nelev, valid, ...) where this
+    loop needs none.
+
+    Returns flat (already-valid-only) arrays: target pixel, source FSP,
+    each candidate's original (boundary_index * 8 + neighbor_position)
+    generation order (what lets `_spillover_claims_reduce`'s tie-break
+    reproduce `_spillover_claims_nb`'s strictly-sequential "first claim
+    stands unless strictly improved on" rule exactly), resulting DTF, and
+    source (boundary pixel's) elevation.
+    """
+    cap = 64
+    out_px = np.empty(cap, dtype=np.int64)
+    out_fsp = np.empty(cap, dtype=np.int64)
+    out_order = np.empty(cap, dtype=np.int64)
+    out_dtf = np.empty(cap, dtype=np.float64)
+    out_elev = np.empty(cap, dtype=np.float64)
+    cnt = 0
+
+    n = bdy_pixels.shape[0]
+    for i in range(n):
+        fj0 = bdy_pixels[i]
+        entry_dtf = bdy_dtf[i]
+        entry_fsp = bdy_fsp[i]
+        bdy_fil = fil[fj0]
+        thr = bdy_fil + fldht - entry_dtf
+        if mxht0 < thr:
+            thr = mxht0
+        row = fj0 // n_cols
+        col = fj0 % n_cols
+        for k in range(8):
+            nr = row + row_off[k]
+            nc = col + col_off[k]
+            if not (0 <= nr < n_rows and 0 <= nc < n_cols):
+                continue
+            npx = nr * n_cols + nc
+            if excluded[npx] or flooded_mask[npx] != 0.0:
+                continue
+            nelev = fil[npx]
+            if nelev == bg or nelev > thr:
+                continue
+            rd = nelev - bdy_fil
+            if rd < 0.0:
+                rd = 0.0
+
+            if cnt >= cap:
+                cap *= 2
+                new_px = np.empty(cap, dtype=np.int64)
+                new_fsp = np.empty(cap, dtype=np.int64)
+                new_order = np.empty(cap, dtype=np.int64)
+                new_dtf = np.empty(cap, dtype=np.float64)
+                new_elev = np.empty(cap, dtype=np.float64)
+                new_px[:cnt] = out_px[:cnt]
+                new_fsp[:cnt] = out_fsp[:cnt]
+                new_order[:cnt] = out_order[:cnt]
+                new_dtf[:cnt] = out_dtf[:cnt]
+                new_elev[:cnt] = out_elev[:cnt]
+                out_px, out_fsp, out_order = new_px, new_fsp, new_order
+                out_dtf, out_elev = new_dtf, new_elev
+            out_px[cnt] = npx
+            out_fsp[cnt] = entry_fsp
+            out_order[cnt] = i * 8 + k
+            out_dtf[cnt] = entry_dtf + rd
+            out_elev[cnt] = bdy_fil
+            cnt += 1
+
+    return out_px[:cnt], out_fsp[:cnt], out_order[:cnt], out_dtf[:cnt], out_elev[:cnt]
+
+
+def _spillover_claims_candidates(
+    bdy_pixels, bdy_dtf, bdy_fsp, fil, flooded_mask, excluded, bg, fldht, mxht0,
+    n_rows, n_cols, row_off, col_off,
+):
+    """Thin wrapper around `_spillover_claims_candidates_nb` -- see that
+    kernel's docstring. Kept as a separate name/signature so callers (and
+    tests) don't need to know or care that this is numba underneath."""
+    return _spillover_claims_candidates_nb(
+        bdy_pixels, bdy_dtf, bdy_fsp, fil, flooded_mask, excluded,
+        float(bg), float(fldht), float(mxht0), n_rows, n_cols, row_off, col_off,
+    )
+
+
+def _spillover_claims_reduce(npx_v, fsp_v, order_v, dtf_v, elev_v, xp):
+    """Reduce flat spillover-claim candidates (from `_spillover_claims_candidates`,
+    NOT restricted to any particular array backend) down to one winner per
+    target pixel, in first-claimed order -- an array/sort-based equivalent of
+    `_spillover_claims_nb`'s incremental "keep if strictly better" dict loop.
+
+    `xp` is `numpy` (a pure-vectorized cross-check of the numba kernel, see
+    tests/test_flood_fill_gpu.py) or `cupy` (the actual `run.use_gpu` path,
+    see `_find_spillover_targets`). Every input array must already be an
+    `xp` array.
+
+    Two independent groupings are needed, both keyed by target pixel:
+      1. the WINNER's value -- lowest resulting DTF, ties broken by higher
+         source elevation, remaining ties broken by lowest generation order
+         (this 3-key lexicographic minimum is mathematically identical to
+         the numba kernel's sequential "only replace on strict improvement"
+         loop: once the true minimum is reached, nothing can beat it, only
+         tie, and ties never replace -- so whichever candidate hits the
+         minimum first is exactly what the sequential version keeps);
+      2. the pixel's OUTPUT POSITION -- the generation order of its very
+         first valid candidate (winning or not), matching the numba
+         kernel's `order` array, which records a pixel the moment it's
+         first seen, before any winner is decided.
+    Both groupings key on the same `npx_v` values via lexsort with npx_v as
+    the primary (last) key, so both yield "unique target pixels, ascending"
+    in the same order -- letting the two be zipped positionally with no
+    separate join step.
+    """
+    if npx_v.shape[0] == 0:
+        empty_i = xp.empty(0, dtype=xp.int64)
+        empty_f = xp.empty(0, dtype=xp.float64)
+        return empty_i, empty_i, empty_f
+
+    winner_perm = xp.lexsort(xp.stack((order_v, -elev_v, dtf_v, npx_v)))
+    npx_w = npx_v[winner_perm]
+    dtf_w = dtf_v[winner_perm]
+    fsp_w = fsp_v[winner_perm]
+    is_first_w = xp.empty(npx_w.shape, dtype=bool)
+    is_first_w[0] = True
+    is_first_w[1:] = npx_w[1:] != npx_w[:-1]
+
+    order_perm = xp.lexsort(xp.stack((order_v, npx_v)))
+    npx_o = npx_v[order_perm]
+    order_o = order_v[order_perm]
+    is_first_o = xp.empty(npx_o.shape, dtype=bool)
+    is_first_o[0] = True
+    is_first_o[1:] = npx_o[1:] != npx_o[:-1]
+    first_order = order_o[is_first_o]
+
+    out_px_u = npx_w[is_first_w]
+    out_dtf_u = dtf_w[is_first_w]
+    out_fsp_u = fsp_w[is_first_w]
+
+    final_perm = xp.argsort(first_order)
+    return out_px_u[final_perm], out_fsp_u[final_perm], out_dtf_u[final_perm]
+
+
 def _find_spillover_targets(
     boundary: list[FloodEntry],
     fil: np.ndarray,
@@ -458,6 +615,7 @@ def _find_spillover_targets(
     strpts_order: dict[int, int],
     n_rows: int,
     n_cols: int,
+    use_gpu: bool = False,
 ) -> list[tuple[int, float, int]]:
     """For each boundary pixel, find neighboring pixels reachable by
     "spilling over" (any of its 8 neighbors within elevation reach, not
@@ -469,6 +627,32 @@ def _find_spillover_targets(
     original's processing-order rule: FSP position (descending, i.e. most
     downstream source first) -> resulting DTF (ascending) -> boundary pixel's
     own elevation (ascending).
+
+    Default (`use_gpu=False`) uses `_spillover_claims_nb`, the numba-dict
+    kernel -- confirmed the fastest option on every real Amite-scale
+    benchmark tried (2026-08-24/25): controlled, repeated, warmed-up-JIT A/B
+    tests on real captured boundary sets (~5k and ~107k boundary pixels,
+    spanning what a real segment run actually produces) never showed the
+    array/sort-based `_spillover_claims_candidates` +
+    `_spillover_claims_reduce(xp=numpy)` path beating it -- roughly tied at
+    best, up to ~20% slower at worst. A full 80-segment production run
+    confirmed the same (array-CPU: 1189.9s vs dict-CPU: 1185.4s -- no real
+    difference). An earlier pass here claimed a 4.6x win for the array path
+    based on an aggregate/wrapped-instrumentation measurement that, in
+    hindsight, doesn't reconcile with any clean per-call measurement (by an
+    order of magnitude) -- almost certainly a measurement artifact, not a
+    real effect; that claim is retracted.
+
+    `use_gpu=True` routes the reduction step through `_spillover_claims_reduce`
+    (xp=cupy) instead, after generating candidates the same way. Also
+    confirmed correct (bit-identical output, 80/80 segments, 487,073,063
+    rows) but also confirmed SLOWER at full production scale (GPU run-model:
+    1230.3s vs CPU: 1185.4s) -- real per-call candidate counts here (tens to
+    a few hundred, even with boundary sets over 100k) are far too small to
+    amortize a GPU kernel launch's fixed few-ms cost against numpy's
+    sub-millisecond in-cache sort. Kept available, not removed, since a much
+    larger AOI or coarser segmentation could someday change this -- just not
+    on any real data seen so far.
     """
     if not boundary:
         return []
@@ -477,10 +661,23 @@ def _find_spillover_targets(
     bdy_dtf = np.fromiter((e.dtf for e in boundary), dtype=np.float64, count=len(boundary))
     bdy_fsp = np.fromiter((e.fsp for e in boundary), dtype=np.int64, count=len(boundary))
 
-    out_px, out_fsp, out_dtf = _spillover_claims_nb(
-        bdy_pixels, bdy_dtf, bdy_fsp, fil, flooded_mask, excluded, bg, fldht, mxht0,
-        n_rows, n_cols, _ROW_OFF, _COL_OFF,
-    )
+    if use_gpu:
+        import cupy as cp
+
+        npx_v, fsp_v, order_v, dtf_v, elev_v = _spillover_claims_candidates(
+            bdy_pixels, bdy_dtf, bdy_fsp, fil, flooded_mask, excluded, bg, fldht, mxht0,
+            n_rows, n_cols, _ROW_OFF, _COL_OFF,
+        )
+        out_px, out_fsp, out_dtf = _spillover_claims_reduce(
+            cp.asarray(npx_v), cp.asarray(fsp_v), cp.asarray(order_v),
+            cp.asarray(dtf_v), cp.asarray(elev_v), xp=cp,
+        )
+        out_px, out_fsp, out_dtf = cp.asnumpy(out_px), cp.asnumpy(out_fsp), cp.asnumpy(out_dtf)
+    else:
+        out_px, out_fsp, out_dtf = _spillover_claims_nb(
+            bdy_pixels, bdy_dtf, bdy_fsp, fil, flooded_mask, excluded, bg, fldht, mxht0,
+            n_rows, n_cols, _ROW_OFF, _COL_OFF,
+        )
     if len(out_px) == 0:
         return []
 
@@ -568,6 +765,7 @@ def run_segment(
     bg: float,
     n_rows: int,
     n_cols: int,
+    use_gpu: bool = False,
     on_iteration: "callable | None" = None,
     trace_pixels: "set[int] | None" = None,
     trace_log: "list | None" = None,
@@ -581,6 +779,14 @@ def run_segment(
 
     `on_iteration(fldht, entries)` is called after each completed depth step,
     for checkpointing.
+
+    `use_gpu` offloads the spillover claims-competition reduction to the GPU
+    via cupy instead of the (default, and on every real benchmark tried,
+    faster) CPU numba-dict kernel -- see `_find_spillover_targets`'s
+    docstring for the full benchmark writeup and why GPU currently loses at
+    real Amite-scale data. Requires the `gpu` extra
+    (`pip install -e ".[gpu]"`) and a CUDA-capable GPU; validated to produce
+    output identical to the CPU-only path (see tests/test_flood_fill_gpu.py).
 
     DEBUG-ONLY: if `trace_pixels` is given, every new-entry/reclaim event
     touching one of those pixels, AND every iteration's boundary-membership
@@ -659,7 +865,7 @@ def run_segment(
             n_before = len(state.entries)
             targets = _find_spillover_targets(
                 bdy, fil, flddat, excluded, bg, fldht, mxht0_eff,
-                strpts_order, n_rows, n_cols,
+                strpts_order, n_rows, n_cols, use_gpu=use_gpu,
             )
             if trace_pixels is not None:
                 for fsp_t, fldzn_t, target_px_t in targets:
