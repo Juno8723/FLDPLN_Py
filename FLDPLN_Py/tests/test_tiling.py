@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from affine import Affine
 
-from PyFLDPLN_src.library.tiling import (
+from PyFLDPLN_src.library_reorganization.tiling import (
     build_tiles,
     calculate_tile_grid,
     compute_relations_pixel_extents,

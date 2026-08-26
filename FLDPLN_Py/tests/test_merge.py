@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from PyFLDPLN_src.mapping.merge import merge_segments
+from PyFLDPLN_src.segmentation.merge import merge_segments
 
 
 def _write_segment_parquet(path, entries):

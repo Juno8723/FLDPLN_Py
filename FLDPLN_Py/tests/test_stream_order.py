@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from PyFLDPLN_src.segmentation.auto import build_auto_segments
-from PyFLDPLN_src.segmentation.stream_order import (
+from PyFLDPLN_src.library_reorganization.stream_order import (
     assign_stream_order,
     build_stream_order_info,
 )

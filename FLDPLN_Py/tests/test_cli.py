@@ -1,6 +1,6 @@
 """Unit tests for the --segments/--exclude-segments resolution logic."""
 
-from PyFLDPLN_src.cli import _resolve_seg_ids
+from PyFLDPLN_src.cli_common import _resolve_seg_ids
 
 
 def test_resolve_seg_ids_defaults_to_all():

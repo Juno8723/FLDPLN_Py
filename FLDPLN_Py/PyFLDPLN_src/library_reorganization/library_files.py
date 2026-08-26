@@ -1,6 +1,6 @@
 """Direct Python port of library_files.m: converts a segment's raw
 flood-fill model output (fsp pixel id, floodplain pixel id, dtf,
-fill_depth -- exactly what model/runner.py's run_segment_to_disk already
+fill_depth -- exactly what segmentation/runner.py's run_segment_to_disk already
 writes) into the final map-coordinate "library" relation table used by
 tiling/mapping.
 
@@ -15,7 +15,7 @@ floodplain pixels by ascending DTF. `sortrows` in MATLAB is a stable sort
 Unlike the original (whose raw `fldpln` column 4 is cumulative "DTF + fill
 depth", later un-done by the existing Tools/fldpln_reorg.py's
 `tdf['FilledDepth'] -= tdf['Dtf']`, fldpln_reorg.py:142), our own
-model/runner.py already computes the final, non-cumulative fill_depth
+segmentation/runner.py already computes the final, non-cumulative fill_depth
 directly (`fil[pixels] - dem[pixels]`) -- so no extra subtraction step is
 needed here; fill_depth is converted to feet and used as-is.
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..model.runner import output_basename
+from ..segmentation.runner import output_basename
 from ..segmentation.units import METERS_PER_FOOT
 
 
@@ -86,7 +86,7 @@ def build_segment_library_relations(
 
     # Canonical FSP order (this segment's fsp_df rows are already
     # upstream->downstream / FspId-ascending by construction, see
-    # library/fsp_table.py:build_fsp_table), each group stable-sorted by Dtf.
+    # library_reorganization/fsp_table.py:build_fsp_table), each group stable-sorted by Dtf.
     frame["_order"] = frame["FspId"].map(
         {fid: i for i, fid in enumerate(seg_fsps["FspId"].to_numpy())}
     )

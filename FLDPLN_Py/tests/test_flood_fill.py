@@ -23,7 +23,7 @@ single forward trace from one spillover target).
 
 import numpy as np
 
-from PyFLDPLN_src.model.flood_fill import run_segment
+from PyFLDPLN_src.segmentation.flood_fill import run_segment
 
 N_ROWS, N_COLS = 3, 3
 SOUTH, EAST = 4, 1

@@ -12,7 +12,7 @@ bookkeeping aren't needed by anyone): the multi-libName download/zip
 machinery, the .mat/Excel round-trip, and the fragile float-equality
 (FspX,FspY) join used to recover FspId (fldpln_reorg.py:165) -- our
 per-segment relations already carry the real FspId directly (see
-library/library_files.py), so that join is structurally unnecessary here,
+library_reorganization/library_files.py), so that join is structurally unnecessary here,
 not just skipped for convenience.
 
 Implemented directly in pixel-index space rather than the original's map-

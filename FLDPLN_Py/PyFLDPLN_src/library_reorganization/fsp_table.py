@@ -15,7 +15,7 @@ table" loop, are both structurally unnecessary here).
 
 Each segment's FSP list (its own stream centerline pixels) is re-derived via
 trace_downstream, exactly the same call already used inside
-model/flood_fill.py's run_segment -- so a segment's FSPs here are
+segmentation/flood_fill.py's run_segment -- so a segment's FSPs here are
 guaranteed identical to the stream points its own flood-fill run used.
 """
 
@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from rasterio.transform import xy as transform_xy
 
-from ..model.flood_fill import trace_downstream
+from ..segmentation.flood_fill import trace_downstream
 from ..segmentation.units import METERS_PER_FOOT
 
 

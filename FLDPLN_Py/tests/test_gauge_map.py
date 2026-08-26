@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from affine import Affine
 
-from PyFLDPLN_src.mapping.gauge_map import (
+from PyFLDPLN_src.floodmap.gauge_map import (
     create_gauge_flood_map,
     estimate_fsp_dof,
     rasterize_tile,

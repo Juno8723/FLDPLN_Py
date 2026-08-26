@@ -24,7 +24,7 @@ true topological (downstream-first) order, not plain ascending StrOrd
 (which a real library can violate, e.g. StrOrd=12 -> DsStrOrd=14).
 
 Also simplified relative to the original: our relation files already carry
-each FSP's real FspId (see library/library_files.py), so rasterization joins
+each FSP's real FspId (see library_reorganization/library_files.py), so rasterization joins
 on FspId directly (matches what the original ALSO already did in
 TileFspFppRelations2Array -- only the DOF-interpolation stage's gauge/
 junction lookups used the more fragile FspX/FspY float-equality join, which

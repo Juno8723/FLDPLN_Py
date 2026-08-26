@@ -15,7 +15,7 @@ Segment-level parallelism (matching the original's parfeval loop / this
 project's `run.n_workers` config) mirrors the original: each segment is an
 independent unit of work (fil/fdr/dem are read-only throughout the flood-fill
 core, and merge is a pixel-wise min over segments -- see flood_fill.py and
-mapping/merge.py -- so segments never interfere with each other, and
+segmentation/merge.py -- so segments never interfere with each other, and
 processing order doesn't affect any individual segment's result).
 `run_library(..., n_workers>1)` parallelizes across segments with a
 ProcessPoolExecutor pinned to the 'fork' start method: fil/fdr/dem are set as

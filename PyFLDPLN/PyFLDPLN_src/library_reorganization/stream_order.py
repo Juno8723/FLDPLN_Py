@@ -90,7 +90,7 @@ def build_stream_order_info(
     convention (fldpln_reorg.py:649-665): for a stream order with a real
     downstream order, the junction point is the FIRST (most upstream, by
     fsp_df's own upstream->downstream row order -- see
-    library/fsp_table.py:build_fsp_table) FSP of the downstream *segment*.
+    library_reorganization/fsp_table.py:build_fsp_table) FSP of the downstream *segment*.
     Outlet orders (no downstream order) get the sentinel (DsStrOrd=0,
     JunctionFspX=0.0, JunctionFspY=0.0), matching fldpln_reorg.py:663-665.
 

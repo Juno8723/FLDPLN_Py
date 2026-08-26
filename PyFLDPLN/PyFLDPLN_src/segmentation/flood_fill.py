@@ -24,7 +24,7 @@ import numpy as np
 from numba import njit, types
 from numba.typed import Dict
 
-from ..segmentation import d8
+from . import d8
 
 # Matches MATLAB's realmax('single'): effectively "no cap" for mxht0.
 REALMAX_SINGLE = float(np.finfo(np.float32).max)

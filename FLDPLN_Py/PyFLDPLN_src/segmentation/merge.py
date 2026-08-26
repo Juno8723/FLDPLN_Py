@@ -1,9 +1,10 @@
 """DTF map merging, porting custom_floodplain_map.m.
 
 Merges per-segment flood-fill Parquet outputs (written by
-PyFLDPLN_src/model/runner.py) into a single raster. Where multiple segments'
-floodplains cover the same pixel, the shallowest (minimum) DTF wins --
-matching the original's `min(ln0, max(fldmn, fldpln(:,2)))` merge rule.
+PyFLDPLN_src/segmentation/runner.py) into a single raster. Where multiple
+segments' floodplains cover the same pixel, the shallowest (minimum) DTF
+wins -- matching the original's `min(ln0, max(fldmn, fldpln(:,2)))` merge
+rule.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from ..io.raster import RasterInfo, write_raster
-from ..model.runner import output_basename
+from .runner import output_basename
 
 
 def _load_segment_pixel_dtf(segdr: Path, fldmx: float, dh: float, seg_id: int) -> tuple[np.ndarray, np.ndarray]:

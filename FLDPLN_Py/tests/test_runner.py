@@ -4,7 +4,7 @@ scenario from test_flood_fill.py."""
 import numpy as np
 import pandas as pd
 
-from PyFLDPLN_src.model.runner import output_basename, run_segment_to_disk
+from PyFLDPLN_src.segmentation.runner import output_basename, run_segment_to_disk
 from tests.test_flood_fill import BG, EAST, N_COLS, N_ROWS, SOUTH, build_grid, px
 
 

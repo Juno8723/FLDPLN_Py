@@ -21,7 +21,9 @@ gpu = ["cupy"]
 dev = ["pytest"]
 
 [project.scripts]
-PyFLDPLN_src = "PyFLDPLN_src.cli:main"
+pyfldpln-segmentation = "PyFLDPLN_src.cli_segmentation:main"
+pyfldpln-library-reorganization = "PyFLDPLN_src.cli_library_reorganization:main"
+pyfldpln-floodmap = "PyFLDPLN_src.cli_floodmap:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -12,7 +12,7 @@ import pytest
 
 cp = pytest.importorskip("cupy")
 
-from PyFLDPLN_src.model.flood_fill import (  # noqa: E402
+from PyFLDPLN_src.segmentation.flood_fill import (  # noqa: E402
     _COL_OFF,
     _ROW_OFF,
     _spillover_claims_candidates,

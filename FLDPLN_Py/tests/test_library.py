@@ -10,9 +10,9 @@ import pytest
 from affine import Affine
 from rasterio.transform import xy as transform_xy
 
-from PyFLDPLN_src.library.fsp_table import add_downstream_distances, build_fsp_table
-from PyFLDPLN_src.library.library_files import build_segment_library_relations
-from PyFLDPLN_src.model.runner import output_basename
+from PyFLDPLN_src.library_reorganization.fsp_table import add_downstream_distances, build_fsp_table
+from PyFLDPLN_src.library_reorganization.library_files import build_segment_library_relations
+from PyFLDPLN_src.segmentation.runner import output_basename
 from PyFLDPLN_src.segmentation.auto import build_auto_segments
 from PyFLDPLN_src.segmentation.units import METERS_PER_FOOT
 
