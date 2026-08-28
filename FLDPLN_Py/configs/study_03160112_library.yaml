@@ -1,0 +1,35 @@
+# PyFLDPLN_src config for the HUC8_03160112 AOI (bil_03160112/ input data).
+# See PyFLDPLN_src/config.py for the full schema.
+
+run:
+  n_workers: 8      # matches the Amite config's worker count, for a fair timing comparison
+  use_gpu: false
+
+paths:
+  home_dir: /home/jsong33/Research/FLDPLN_Pyconverting/
+  dem: bil_03160112/03160112_Dem/03160112_masked.bil
+  fil: bil_03160112/03160112_Fil/03160112_Fil.bil
+  fdr: bil_03160112/03160112_Fdr/03160112_Fdr.bil
+  fac: bil_03160112/03160112_Fac/03160112_Fac.bil
+  segment_raster: FLDPLN_Py/outputs/study_03160112/bil/str_segid.bil
+  seg_info: FLDPLN_Py/outputs/study_03160112/mat/seg_info.parquet
+  seed_points_shapefile: null
+  crs: null   # EPSG:26916 (UTM 16N) confirmed present in the input rasters' own .prj files
+
+segmentation:
+  method: auto
+  stream_threshold_sqmi: 70
+  break_threshold_sqmi: 25
+  max_segment_length_mi: 5
+
+flood:
+  fldmn: 0.01
+  dh: 1
+  fldmx: 15
+  max_height_cap: 0
+  steady_state: true
+
+output:
+  segment_files_dir: FLDPLN_Py/outputs/study_03160112/segment_files/
+  map_output: FLDPLN_Py/outputs/study_03160112/bil/fldpln_map.bil
+  library_dir: FLDPLN_Py/outputs/study_03160112/library/

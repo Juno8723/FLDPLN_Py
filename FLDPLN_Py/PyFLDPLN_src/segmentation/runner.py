@@ -76,11 +76,18 @@ def run_segment_to_disk(
     n_cols: int,
     segdr: Path,
     use_gpu: bool = False,
+    inner_workers: int = 1,
 ) -> Path:
     """Run the flood-fill simulation for one segment and write its output
     (skipping segments already fully processed, matching the original's
     `if(~exist([outf,'.mat'],'file'))` guard, adapted to Parquet's
-    `.parquet` extension)."""
+    `.parquet` extension).
+
+    `inner_workers` is passed straight through to `run_segment` -- see its
+    docstring. Independent of (and safe to combine with) this module's own
+    segment-level `n_workers` parallelism below: each forked worker process
+    gets its own GIL, so an inner thread pool inside one segment never
+    contends with another segment's."""
     segdr = Path(segdr)
     segdr.mkdir(parents=True, exist_ok=True)
     basename = output_basename(fldmx, dh, seg_id)
@@ -122,6 +129,7 @@ def run_segment_to_disk(
         n_rows=n_rows,
         n_cols=n_cols,
         use_gpu=use_gpu,
+        inner_workers=inner_workers,
         on_iteration=checkpoint,
     )
 
@@ -149,6 +157,7 @@ def _run_one_segment(seg_id: int) -> tuple[int, "Path | None", "str | None"]:
             seg_id, seg_row, ctx["fil"], ctx["fdr"], ctx["dem"],
             ctx["fldmn"], ctx["fldmx"], ctx["dh"], ctx["mxht0"], ctx["ssflg"],
             ctx["bg"], ctx["n_rows"], ctx["n_cols"], ctx["segdr"], ctx["use_gpu"],
+            ctx["inner_workers"],
         )
         return seg_id, path, None
     except Exception as exc:  # noqa: BLE001 -- reported to the parent, not swallowed
@@ -179,6 +188,7 @@ def run_library(
     seg_ids: list[int] | None = None,
     n_workers: int = 1,
     use_gpu: bool = False,
+    inner_workers: int = 1,
 ) -> list[Path]:
     """Run the flood-fill simulation for every segment in seg_info (or just
     `seg_ids` if given). seg_id is the 1-based row position in seg_info
@@ -190,6 +200,13 @@ def run_library(
     already completed on a prior run are skipped either way (final .parquet
     already exists, checked in run_segment_to_disk), so a parallel run can
     safely resume where a killed sequential (or parallel) run left off.
+
+    `inner_workers` (default 1, unchanged behavior) is passed through to
+    every `run_segment` call -- see its docstring. Independent of
+    `n_workers`: a segment that hits a long enough spillover path threads
+    its own backfill-reclaim work internally regardless of whether it's
+    running in the sequential branch below or inside one forked worker
+    process of the `n_workers > 1` branch.
     """
     if seg_ids is None:
         seg_ids = list(range(1, len(seg_info) + 1))
@@ -201,7 +218,7 @@ def run_library(
             seg_row = seg_info.iloc[seg_id - 1]
             path = run_segment_to_disk(
                 seg_id, seg_row, fil, fdr, dem, fldmn, fldmx, dh, mxht0, ssflg, bg,
-                n_rows, n_cols, segdr, use_gpu,
+                n_rows, n_cols, segdr, use_gpu, inner_workers,
             )
             outputs.append(path)
             print(f"segment {seg_id} of {len(seg_ids)} completed -> {path.name}")
@@ -219,6 +236,7 @@ def run_library(
         seg_info=seg_info, fil=fil, fdr=fdr, dem=dem,
         fldmn=fldmn, fldmx=fldmx, dh=dh, mxht0=mxht0, ssflg=ssflg, bg=bg,
         n_rows=n_rows, n_cols=n_cols, segdr=segdr, use_gpu=use_gpu,
+        inner_workers=inner_workers,
     )
     outputs_by_id: dict[int, Path] = {}
     failures: list[tuple[int, str]] = []

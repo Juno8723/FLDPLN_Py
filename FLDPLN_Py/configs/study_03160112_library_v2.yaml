@@ -1,0 +1,41 @@
+# PyFLDPLN_src config for the HUC8_03160112 AOI (bil_03160112/ input data).
+# v2: stream_threshold_sqmi lowered from 70 (Amite default, unscaled) to 32,
+# proportionally scaled to this AOI's much smaller total basin drainage area
+# (Amite: 70/1724.6sqmi ~4.06% of basin; this AOI: 787.9sqmi total basin,
+# 4.06% ~= 32sqmi). Closes the segmentation gap on the Black Warrior River
+# reach near old-seg16 (was excluded as "below threshold" even though its FAC
+# was 69.0sqmi, essentially the same order of magnitude as the threshold).
+# See investigation notes for the overnight report.
+
+run:
+  n_workers: 8
+  use_gpu: false
+
+paths:
+  home_dir: /home/jsong33/Research/FLDPLN_Pyconverting/
+  dem: bil_03160112/03160112_Dem/03160112_masked.bil
+  fil: bil_03160112/03160112_Fil/03160112_Fil.bil
+  fdr: bil_03160112/03160112_Fdr/03160112_Fdr.bil
+  fac: bil_03160112/03160112_Fac/03160112_Fac.bil
+  segment_raster: FLDPLN_Py/outputs/study_03160112_v2/bil/str_segid.bil
+  seg_info: FLDPLN_Py/outputs/study_03160112_v2/mat/seg_info.parquet
+  seed_points_shapefile: null
+  crs: null
+
+segmentation:
+  method: auto
+  stream_threshold_sqmi: 32
+  break_threshold_sqmi: 25
+  max_segment_length_mi: 5
+
+flood:
+  fldmn: 0.01
+  dh: 1
+  fldmx: 15
+  max_height_cap: 0
+  steady_state: true
+
+output:
+  segment_files_dir: FLDPLN_Py/outputs/study_03160112_v2/segment_files/
+  map_output: FLDPLN_Py/outputs/study_03160112_v2/bil/fldpln_map.bil
+  library_dir: FLDPLN_Py/outputs/study_03160112_v2/library/

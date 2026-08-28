@@ -18,6 +18,7 @@ the indexing-convention note).
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -102,7 +103,7 @@ def trace_exclusion_zone(
 # ---------------------------------------------------------------------------
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _backfill_reach_nb(start_px, fil0, mxht, fil, fdr, flddat, bg, n_rows, n_cols,
                         row_off, col_off, inflow, blocked, check_flooded):
     """JIT kernel for backfill_reach (see wrapper below for the docstring/
@@ -125,6 +126,14 @@ def _backfill_reach_nb(start_px, fil0, mxht, fil, fdr, flddat, bg, n_rows, n_col
     Traversal is an explicit FIFO queue (breadth-first), matching the
     original's `fldtmp` array: scanned front-to-back via an incrementing
     index while newly-qualifying neighbors are appended at the end.
+
+    `nogil=True`: every read here (`fil`, `fdr`, `flddat`, `bg`, `blocked`)
+    is an argument the caller already owns and never mutates during this
+    call, and every write (`visited`, `out_px`, `out_depth`, the growable
+    queue) is a fresh local allocated on entry -- so concurrent calls from
+    multiple threads never touch each other's state. This is what lets
+    `_backfill_reach_parallel` below fan calls to this function out across a
+    real thread pool instead of serializing on the GIL.
     """
     visited = Dict.empty(key_type=types.int64, value_type=types.boolean)
 
@@ -236,6 +245,58 @@ def backfill_reach(
         n_rows, n_cols, _ROW_OFF, _COL_OFF, _INFLOW, blocked, check_flooded,
     )
     return list(zip(out_px.tolist(), out_depth.tolist()))
+
+
+# Below this size, ThreadPoolExecutor submit/collect overhead isn't worth it
+# -- the sequential loop in run_segment stays on the plain per-pixel
+# backfill_reach() calls for short spillover paths (the overwhelming common
+# case) and only routes through the thread pool once there's enough
+# independent work per path to actually amortize it. Chosen conservatively;
+# not tuned against a sweep, just "clearly larger than pool dispatch cost".
+PARALLEL_BACKFILL_THRESHOLD = 8
+
+
+def _backfill_reach_parallel(
+    items: list[tuple[int, float, float]],
+    fil: np.ndarray,
+    fdr: np.ndarray,
+    flddat: np.ndarray,
+    bg: float,
+    n_rows: int,
+    n_cols: int,
+    extra_blocked: set,
+    max_workers: int,
+) -> list[list[tuple[int, float]]]:
+    """Thread-parallel equivalent of calling `backfill_reach(px, elev, v0,
+    ..., extra_blocked=extra_blocked, check_flooded=False)` once per `(px,
+    elev, v0)` in `items`, returning results in the same order as `items`.
+
+    Safe to parallelize *only* because every call in the loop this replaces
+    (run_segment's spillover-path backfill-reclaim step) shares no mutable
+    state until the caller's own post-loop merge -- see `_backfill_reach_nb`'s
+    docstring and this call site's comment in `run_segment` for the full
+    argument. `extra_blocked` is identical across every item in one call
+    (it's the traced spillover path's own pixel set), so the numba `blocked`
+    Dict is built once here and shared read-only across threads, instead of
+    being rebuilt per pixel the way the plain `backfill_reach` wrapper does.
+    """
+    if extra_blocked:
+        blocked = Dict.empty(key_type=types.int64, value_type=types.boolean)
+        for px in extra_blocked:
+            blocked[np.int64(px)] = True
+    else:
+        blocked = _NO_BLOCKED
+
+    def _one(item: tuple[int, float, float]) -> list[tuple[int, float]]:
+        px, elev, v0 = item
+        out_px, out_depth = _backfill_reach_nb(
+            np.int64(px), float(elev), float(v0), fil, fdr, flddat, bg,
+            n_rows, n_cols, _ROW_OFF, _COL_OFF, _INFLOW, blocked, False,
+        )
+        return list(zip(out_px.tolist(), out_depth.tolist()))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        return list(pool.map(_one, items))
 
 
 def _in_bounds_neighbors(row: int, col: int, n_rows: int, n_cols: int):
@@ -766,6 +827,7 @@ def run_segment(
     n_rows: int,
     n_cols: int,
     use_gpu: bool = False,
+    inner_workers: int = 1,
     on_iteration: "callable | None" = None,
     trace_pixels: "set[int] | None" = None,
     trace_log: "list | None" = None,
@@ -779,6 +841,18 @@ def run_segment(
 
     `on_iteration(fldht, entries)` is called after each completed depth step,
     for checkpointing.
+
+    `inner_workers` (default 1, i.e. today's plain sequential behavior)
+    bounds how many threads the spillover-path backfill-reclaim step (see
+    `_backfill_reach_parallel`) may use for one traced path's per-pixel
+    backfill calls, once that path is at least `PARALLEL_BACKFILL_THRESHOLD`
+    pixels long. This is the loop profiling found responsible for
+    catastrophically slow segments on wide/flat floodplains (a real example:
+    4,695,063,004 numba dict operations in this one call site, 62x the wall
+    time of a similarly-sized normal segment) -- see this function's
+    spillover loop below for why parallelizing exactly this loop (and not,
+    e.g., the per-target loop one level up) is safe. Output is identical
+    regardless of `inner_workers`; it only affects wall time.
 
     `use_gpu` offloads the spillover claims-competition reduction to the GPU
     via cupy instead of the (default, and on every real benchmark tried,
@@ -887,12 +961,32 @@ def run_segment(
                 fldstg0 = d0 - fil[target_px]
 
                 new_entries: dict[int, float] = {px: 0.0 for px, _ in path}
-                for px, elev in path:
-                    v0 = elev + fldstg0
-                    reach = backfill_reach(
-                        px, elev, v0, fil, fdr, flddat, bg, n_rows, n_cols,
-                        extra_blocked=path_pixels, check_flooded=False,
+                # Each (px, elev) here backfills independently -- flddat is
+                # only read (never written) until the merge just below, and
+                # that merge is an order-independent "keep the smaller
+                # rel_depth" reduction -- so for long paths (the case
+                # profiling found responsible for pathologically slow
+                # segments on wide/flat floodplains) this fans out across a
+                # thread pool instead of running one pixel at a time. Short
+                # paths (the common case) keep the plain sequential loop,
+                # since pool dispatch overhead would net-lose on them. See
+                # `_backfill_reach_parallel`'s docstring for the full safety
+                # argument.
+                if inner_workers > 1 and len(path) >= PARALLEL_BACKFILL_THRESHOLD:
+                    reaches = _backfill_reach_parallel(
+                        [(px, elev, elev + fldstg0) for px, elev in path],
+                        fil, fdr, flddat, bg, n_rows, n_cols,
+                        path_pixels, inner_workers,
                     )
+                else:
+                    reaches = [
+                        backfill_reach(
+                            px, elev, elev + fldstg0, fil, fdr, flddat, bg, n_rows, n_cols,
+                            extra_blocked=path_pixels, check_flooded=False,
+                        )
+                        for px, elev in path
+                    ]
+                for reach in reaches:
                     for rpx, rel_depth in reach:
                         if rpx not in new_entries or rel_depth < new_entries[rpx]:
                             new_entries[rpx] = rel_depth

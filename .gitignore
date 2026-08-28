@@ -1,6 +1,7 @@
 # original input data (kept out of git, large binary rasters)
 bil/
 bil_Amite/
+bil_03160112/
 
 # generated pipeline outputs
 FLDPLN_Py/outputs/
