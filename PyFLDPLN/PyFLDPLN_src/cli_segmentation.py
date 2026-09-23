@@ -118,7 +118,15 @@ def run_FLDPLN(
     in fldpln_wrapper_v8.m that calls fldpln_model_v8 for each segment.
 
     `run.n_workers` (null = os.cpu_count()) controls segment-level
-    parallelism; see segmentation/runner.py's docstring for how it's implemented.
+    parallelism; see segmentation/runner.py's docstring for how it's
+    implemented. The same value is also passed as `inner_workers`, capping
+    the thread pool a single segment may use internally for its own
+    spillover-path backfill-reclaim step once a path is long enough to
+    benefit (see flood_fill.run_segment's docstring) -- reusing `n_workers`
+    here rather than adding a separate config knob is deliberate: whichever
+    segments are still running late (typically the 1-3 pathological ones on
+    a wide/complex floodplain) are exactly when every other segment-level
+    worker has already finished and its cores are sitting idle.
     """
     fil, fil_info = read_raster(cfg.paths.fil_path, crs=cfg.paths.crs)
     fdr, _ = read_raster(cfg.paths.fdr_path, crs=cfg.paths.crs)
@@ -151,6 +159,7 @@ def run_FLDPLN(
         seg_ids=seg_ids,
         n_workers=cfg.run.n_workers or os.cpu_count() or 1,
         use_gpu=cfg.run.use_gpu,
+        inner_workers=cfg.run.n_workers or os.cpu_count() or 1,
     )
 
 
